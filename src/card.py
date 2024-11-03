@@ -1,10 +1,13 @@
 import math
 import random
+from enum import IntEnum
+
+
 
 class Card():
     cards_per_class = 13
     suite_map = ('C', 'D', 'H', 'S')
-    face_map = ('2', '3', '4', '5', '6', '7', '8', '9', "10", 'J', 'Q', 'K', 'A')
+    face_map = ['2', '3', '4', '5', '6', '7', '8', '9', "10", 'J', 'Q', 'K', 'A']
 
     def __init__(self, number):
         self.number = number
@@ -24,6 +27,15 @@ class Card():
     def __str__(self):
         return self.suite + self.face
 
+    def __int__(self):
+        return self.number
+
+    def __index__(self):
+        return self.__int__()
+
+    def compare(self, other):
+        return (self.number % Card.cards_per_class) - (other.number % Card.cards_per_class)
+
     def to_byte(self):
         return self.number.to_bytes()
 
@@ -31,21 +43,26 @@ class Card():
 def makeShuffledDeck():
     res = []
     for i in range(0,52):
-        self.cards.append(Card(i))
+        res.append(Card(i))
     random.shuffle(res)
     return res
 
+
+
 def makeCardList(cardBytes):
     res = []
-    for i in range(0, len(cardBytes), 2):
-        res.append(Card(int.from_bytes(cardBytes[i:i+2])))
+    for i in range(0, len(cardBytes)):
+        res.append(Card(cardBytes[i]))
     return res
 
-test = Card(14)
-print(Card(5).to_byte())
-#print('' + test.to_bytes())
-#print(test in makeCardList((14).to_bytes()))
-
+#test = Card(14)
+#print(Card(5).to_byte())
+#print(test.to_byte())
+#print(test in makeCardList(((13 << 8) + 14).to_bytes(2)))
+# for card in  makeCardList(((13 << 8) + 14).to_bytes(2)):
+#    print(card, end=' ')
+#for card in makeShuffledDeck():
+#    print(card, end=' ')
 '''
     The server will wait until it receives a start game request
         The server will create a shuffled deck then split it into two halfs
@@ -58,3 +75,23 @@ print(Card(5).to_byte())
     ...
 
 '''
+
+
+# Header values
+class Headers(IntEnum):
+    WANT_GAME = 0
+    START_GAME = 1
+    PLAY_CARD = 2
+    PLAY_RESULT = 3
+
+
+# Play results
+class Results(IntEnum):
+    WIN = 0
+    DRAW = 1
+    LOSS = 2
+
+
+DEFAULT_PAYLOAD = b'0'
+
+

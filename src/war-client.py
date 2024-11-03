@@ -1,4 +1,8 @@
 import socket
+import argparse
+
+from card import *
+
 
 '''
     Open port and connect to ip/port that is passed in as parameter to main
@@ -11,21 +15,10 @@ import socket
 
 '''
 
-# Header values
-class Headers(Enum):
-    WANT_GAME = b'0'
-    START_GAME = b'1'
-    PLAY_CARD = b'2'
-    PLAY_RESULT = b'3'
-
-# Play results
-class Results(Enum):
-    WIN = b'0'
-    DRAW = b'1'
-    LOSS = b'2'
-
-DEFAULT_PAYLOAD = b'0'
-
+VERBOSE = False
+def verbosePrint(*values):
+    if VERBOSE:
+        print(*values)
 
 def main():
     """
@@ -33,33 +26,72 @@ def main():
     printresults(lookup(hostname))
     """
     argument_parser = argparse.ArgumentParser()
-    argument_parser.add_argument("name", nargs="+",
-                                 help="DNS name(s) to look up")
+    argument_parser.add_argument("dest", nargs="+",
+                                 help="ip address followed by port num")
     argument_parser.add_argument("-v", "--verbose",
                                  help="increase output verbosity",
                                  action="store_true")
-    program_args = argument_parser.parse_args()
+    args = argument_parser.parse_args()
+    global VERBOSE
+    VERBOSE = args.verbose
     # TODO: Get port number
-    port_num = 20000
-    server_port = 4444
-    address = '127.0.0.1'
+    #port_num = 
+    server_port = int(args.dest[1]) # TODO: Use argeparse properly for these
+    address = args.dest[0]
+    
+    verbosePrint("STARTING CLIENT WITH IP ", address, " ON PORT ",  server_port)
 
-    s = socket.create_connection((address, server_port), source_address=(address, port_num))
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((address, server_port))
 
     # Send 'want game' packet
-    s.send(Headers.WANT_GAME + DEFAULT_PAYLOAD)
+    s.send(Headers.WANT_GAME.to_bytes() + DEFAULT_PAYLOAD)
+
+    verbosePrint("SENT START GAME PACKET")
+    
+    results = {
+        "wins": 0,
+        "ties": 0,
+        "losses": 0
+    }
 
     # TODO: Listen for response with the 26 cards
+    p = s.recv(27)
     # TODO: Receive 26 cards and convert them into deck
-    cards = []
+    cards = makeCardList(p[1:])
+
+    if args.verbose:
+        print("RECEIVED DECK:", end=' ')
+        for card in cards:
+            print(card, end=' ')
+        print()
 
     for card in cards:
         # Send one of the cards back to server
-        s.send(Headers.PLAY_CARD + cards.pop())
-        # TODO: Wait for response message
+        bytes_to_send = Headers.PLAY_CARD.to_bytes() + card.to_byte()
+        s.send(bytes_to_send)
+        verbosePrint("PLAYED CARD: ", card, "BY SENDING PACKET", bytes_to_send)
+        # Wait for response message
+        p = s.recv(2)
+        verbosePrint("RECEIVED PACKET: ", p)
+        # TODO: Do packet validation
+        if p[1] == int(Results.WIN):
+            verbosePrint("ROUND WON")
+            results["wins"] = results["wins"] + 1
+        elif p[1] == int(Results.DRAW):
+            results["ties"] = results["ties"] + 1
+            verbosePrint("ROUND TIED")
+        else:
+            results["losses"] = results["losses"] + 1
+            verbosePrint("ROUND LOST")
+    
     # TODO: Close connection. Probably use 'with' statement
-
-
+    s.close()
+    if results["wins"] > 13 - results['ties']:
+        verbosePrint("WON GAME WITH", results["wins"], "WINS")
+    else:
+        verbosePrint("LOST GAME WITH", results["wins"], "WINS")
+    verbosePrint(results)
 
 if __name__ == "__main__":
     main()
