@@ -10,6 +10,8 @@ class Card():
     face_map = ['2', '3', '4', '5', '6', '7', '8', '9', "10", 'J', 'Q', 'K', 'A']
 
     def __init__(self, number):
+        if number >= 52 or number < 0:
+            raise ValueError("Cannot create card not in range [0,52]")
         self.number = number
         self.face = Card.face_map[number % Card.cards_per_class]
         self.suite = Card.suite_map[math.floor(number / Card.cards_per_class)]
@@ -54,28 +56,6 @@ def makeCardList(cardBytes):
     for i in range(0, len(cardBytes)):
         res.append(Card(cardBytes[i]))
     return res
-
-#test = Card(14)
-#print(Card(5).to_byte())
-#print(test.to_byte())
-#print(test in makeCardList(((13 << 8) + 14).to_bytes(2)))
-# for card in  makeCardList(((13 << 8) + 14).to_bytes(2)):
-#    print(card, end=' ')
-#for card in makeShuffledDeck():
-#    print(card, end=' ')
-'''
-    The server will wait until it receives a start game request
-        The server will create a shuffled deck then split it into two halfs
-        The server will wait until it receives another start game request
-        It will send each client a a deck on each thread
-        The clients will receive their decks and use makeCardList to store them (after converting from bytes to ints)
-        Each client will remove the 0th card and send it to the server
-        The server will receive
-    The server will send the result of the war back to the client
-    ...
-
-'''
-
 
 # Header values
 class Headers(IntEnum):

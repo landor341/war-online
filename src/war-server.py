@@ -3,165 +3,159 @@ import argparse
 from _thread import *
 import threading
 
-from card import *
-#a
-'''
-    Open port that is passed in as parameter to main
-    Then wait until two TCP connections have been created by war-clients
-    
-    After receiving 0000 packets from two clients then
-    First packet of game is 01 followed by 26 card values
-    Then after receiving a play card from both clients (an 02 followed by a card value)
-    Send a card result packets to both (03 followd by 00 if win 01 if draw 02 if loss)
-    Then wait until next play card packet is received from both clients
-    After 26 rounds close TCP connection with clients. No need to send a win message since they'll know if they kept track of the packets
+import math
+import random
+from enum import IntEnum
 
-'''
 
-VERBOSE = False
-def verbosePrint(*values):
-    if VERBOSE:
+def verbose_print(*values):
+    if 'VERBOSE' in globals() and VERBOSE:
         print(*values)
+
 
 print_lock = threading.Lock()
 
+
 def start_war_server(port):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('127.0.0.1', port))
-        s.listen()
-        verbosePrint("OPENED SERVER ON PORT", port)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(('127.0.0.1', port))
+    s.listen()
+    conn1, addr1 = s.accept()
+    verbose_print("CONNECTION STARTED: ", addr1)
+    conn2, addr2 = s.accept()
+    verbose_print("CONNECTION STARTED: ", addr2)
 
-        conn1, addr1 = s.accept()
-        verbosePrint("CONNECTION RECEIVED WITH", addr1)
-        conn2, addr2 = s.accept()
-        verbosePrint("CONNECTION RECEIVED WITH", addr2)
+    try:
+        verbose_print("SERVER STARTED: (port:", str(port) + ")")
+        client1, client2 = WarClient(conn1, 1), WarClient(conn2, 2)
 
-        client1 = warClient(conn1)
-        client2 = warClient(conn2)
-        start_new_thread(client1.runClientThread, (1,))
-        verbosePrint("FINISHED STARTING CLIENT1 THREAD")
-        start_new_thread(client2.runClientThread, (2,))
-        verbosePrint("FINISHED STARTING CLIENT2 THREAD")
-        print_lock.acquire()
+        client1.lockAndReceiveGameStart()
+        client2.lockAndReceiveGameStart()
+        client1.resolve()
+        client2.resolve()
+        verbose_print("Game: Starting game")
 
-        movesRemaining = 26
-        verbosePrint("Game thread started")
-
-        # Wait until both clients have signaled to start game
-        while not (client1.gameBeingPlayed and client2.gameBeingPlayed):
-            pass
+        moves_remaining = 26
 
         # Give client threads data needed to send out decks
         deck = makeShuffledDeck()
         client1.deck = deck[0:26]
         client2.deck = deck[26:52]
 
-        verbosePrint("Game STARTED")
+        client1.lockAndSendDeck()
+        client2.lockAndSendDeck()
+        client1.resolve()
+        client2.resolve()
+        verbose_print("Game: Decks transmitted")
 
-        while movesRemaining != 0:
-            verbosePrint("Game WAITING FOR CLIENTS TO RECEIVE CARDS")
-            while client1.waitingForCard or client2.waitingForCard:
-                pass
-            verbosePrint("Game SENDING OUT ROUND RESULT WITH", movesRemaining, "ROUNDS REMAINING")
-            # TODO: send both clients the result of the round
-            if movesRemaining == 1:
-                client1.gameBeingPlayed = False
-                client2.gameBeingPlayed = False
+        while moves_remaining != 0:
+            verbose_print("Game: Waiting to receive moves")
+
+            client1.lockAndReceiveCardPlayed()
+            client2.lockAndReceiveCardPlayed()
+            client1.resolve()
+            client2.resolve()
+
+            if client1.curCard in client1.playedCards or client2.curCard in client2.playedCards:
+                raise ValueError("Card that was already played was sent")
 
             client1.setRoundResult(client1.curCard.compare(client2.curCard))
             client2.setRoundResult(client2.curCard.compare(client1.curCard))
-            movesRemaining = movesRemaining - 1
 
-        # TODO: End of game loop. Make sure both clients know to end game
-        verbosePrint("Game ENDED")
-        while (client1.wonLastRound is not None) or (client2.wonLastRound is not None):
-            pass
+            verbose_print("Game: Round", str(moves_remaining) + ": comp(c1, c2) =", client1.curCard.compare(client2.curCard))
+
+            client1.waitAndSendPlayResult()
+            client2.waitAndSendPlayResult()
+            client1.resolve()
+            client2.resolve()
+
+            moves_remaining = moves_remaining - 1
+
+        verbose_print("Game: Game Over")
         conn1.close()
         conn2.close()
-        print_lock.release()
+    except TimeoutError as e:
+        print("Caught timeout condition")
+        print(e)
+    except ValueError as e:
+        print("Caught illegal value error")
+    finally:
+        conn1.close()
+        conn2.close()
+        s.close()
 
 
-class warClient():
-    def __init__(self, conn):
+class WarClient:
+    def __init__(self, conn, id):
         self.conn = conn
         self.deck = None
-        self.waitingForCard = True
+        self.playedCards = []
         self.curCard = None
-        self.gameBeingPlayed = False
         self.wonLastRound = None
+        self.lock = threading.Lock()
+        self.id = id
+        self.flag = True
 
-    def receiveGameStart(self, lock):
-        lock.acquire()
-        # Wait to receive start game signal
-        while not self.gameBeingPlayed:
+    def resolve(self):
+        if not self.lock.acquire():
+            raise TimeoutError("Timed out")
+        if not self.flag:
+            raise ValueError("Illegal data received")
+        self.lock.release()
+
+    def releaseLock(self):
+        return self.lock.release()
+
+    def lockAndReceiveGameStart(self):
+        def getGameStart():
+            # Wait to receive start game signal
             data = self.conn.recv(2)
-            if data[0] == int(Headers.WANT_GAME):
-                self.gameBeingPlayed = True
-                lock.release()
-                return
-
-    def sendDeck(self, lock):
-        lock.acquire()
-        verbosePrint("Client" + str(id), "Sending deck")
-        # Send deck
-        self.conn.send(Headers.START_GAME.to_bytes() + bytearray(self.deck))
-        lock.release()
-
-    def receiveCardPlayed(self, lock):
-        lock.acquire()
-        while self.waitingForCard:
-            data = self.conn.recv(2)
-            verbosePrint("RECEIVED PACKET: ", data)
-            if len(data) > 0 and data[0] == int(Headers.PLAY_CARD):
-                verbosePrint("Client" + str(id), "Just received card ", self.curCard)
-                lock.release()
-                return Card(data[1])
-
-    def sendPlayResult(self, lock):
-        lock.acquire()
-        bytes_to_send = (Headers.PLAY_RESULT.to_bytes() + bytearray([self.wonLastRound]))
-        verbosePrint("Client" + str(id), "Sending packet to user:", bytes_to_send)
-        self.conn.send(bytes_to_send)
-        lock.release()
-
-
-    def runClientThread(self, id):
-        verbosePrint("Client" + str(id), "thread started")
-
-        # Wait to receive start game signal
-        while not self.gameBeingPlayed:
-            data = self.conn.recv(2)
-            if data[0] == int(Headers.WANT_GAME):
-                self.gameBeingPlayed = True
-                break
-
-        # Wait for deck to be defined by warInstance
-        while self.deck is None:
-            pass
-
-        verbosePrint("Client" + str(id), "Sending deck")
-        # Send deck
-        self.conn.send(Headers.START_GAME.to_bytes() + bytearray(self.deck))
-
-        while self.gameBeingPlayed:
-            while self.waitingForCard:
-                data = self.conn.recv(2)
-                verbosePrint("RECEIVED PACKET: ", data)
-                if len(data) > 0 and data[0] == int(Headers.PLAY_CARD):
-                    self.waitingForCard = False
-                    self.curCard = Card(data[1])
-
-            verbosePrint("Client" + str(id), "Just received card ", self.curCard)
-
-            # Wait for warThread to send out result of the play
-            while self.wonLastRound is None:
+            if len(data) == 2 and data[0] == int(Headers.WANT_GAME):
                 pass
+            else:
+                self.flag = False
+            self.releaseLock()
 
-            bytes_to_send = (Headers.PLAY_RESULT.to_bytes() + bytearray([self.wonLastRound]))
-            verbosePrint("Client" + str(id), "Sending packet to user:", bytes_to_send)
+        self.lock.acquire()
+        start_new_thread(getGameStart, ())
+
+    def lockAndSendDeck(self):
+        def sendDeck():
+            verbose_print("Client" + str(self.id) + ":", "Sending deck")
+            # Send deck
+            self.conn.send(Headers.START_GAME.to_bytes(1, 'big') + bytearray(self.deck))
+            self.releaseLock()
+
+        self.lock.acquire()
+        start_new_thread(sendDeck, ())
+
+    def lockAndReceiveCardPlayed(self):
+        flag = True
+        def getCardPlayed():
+            data = self.conn.recv(2)
+            if len(data) == 2 and data[0] == int(Headers.PLAY_CARD):
+                verbose_print("Client" + str(self.id) + ":", "Received card ", self.curCard)
+                try:
+                    self.curCard = Card(data[1])
+                except ValueError:
+                    self.flag = False
+            else:
+                self.flag = False
+            self.releaseLock()
+
+        self.lock.acquire()
+        start_new_thread(getCardPlayed, ())
+
+
+    def waitAndSendPlayResult(self):
+        def getPlayResult():
+            bytes_to_send = (Headers.PLAY_RESULT.to_bytes(1, 'big') + bytearray([self.wonLastRound]))
+            verbose_print("Client" + str(self.id) + ":", "Sending packet to user:", bytes_to_send)
             self.conn.send(bytes_to_send)
-            self.wonLastRound = None
-        verbosePrint("Client" + str(id), "Ending")
+            self.releaseLock()
+
+        self.lock.acquire()
+        start_new_thread(getPlayResult, ())
 
     def setRoundResult(self, result):
         if result > 0:
@@ -170,7 +164,67 @@ class warClient():
             self.wonLastRound = Results.LOSS
         else:
             self.wonLastRound = Results.DRAW
-        self.waitingForCard = True
+        self.playedCards.append(self.curCard)
+
+
+class Card():
+    cards_per_class = 13
+    suite_map = ('C', 'D', 'H', 'S')
+    face_map = ['2', '3', '4', '5', '6', '7', '8', '9', "10", 'J', 'Q', 'K', 'A']
+
+    def __init__(self, number):
+        if number >= 52 or number < 0:
+            raise ValueError("Cannot create card not in range [0,52]")
+        self.number = number
+        self.face = Card.face_map[number % Card.cards_per_class]
+        self.suite = Card.suite_map[math.floor(number / Card.cards_per_class)]
+
+    def __eq__(self, other):
+        if isinstance(other, bytes):
+            return self.number.to_bytes(1, 'big') == other
+        if isinstance(other, int):
+            return self.number == other
+        return self.number == other.number
+
+    def __lt__(self, other):
+        return self.number < other.number
+
+    def __str__(self):
+        return self.suite + self.face
+
+    def __int__(self):
+        return self.number
+
+    def __index__(self):
+        return self.__int__()
+
+    def compare(self, other):
+        return (self.number % Card.cards_per_class) - (other.number % Card.cards_per_class)
+
+    def to_byte(self):
+        return self.number.to_bytes(1, 'big')
+
+
+def makeShuffledDeck():
+    res = []
+    for i in range(0,52):
+        res.append(Card(i))
+    random.shuffle(res)
+    return res
+
+
+class Headers(IntEnum):
+    WANT_GAME = 0
+    START_GAME = 1
+    PLAY_CARD = 2
+    PLAY_RESULT = 3
+
+
+# Play results
+class Results(IntEnum):
+    WIN = 0
+    DRAW = 1
+    LOSS = 2
 
 
 def main():
